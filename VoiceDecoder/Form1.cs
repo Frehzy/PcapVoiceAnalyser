@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using NAudio.Wave;
 using System.ComponentModel;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using VoiceDecoder.Entities;
 using VoiceDecoder.Entities.Intermediate;
 using VoiceDecoder.Models;
@@ -10,7 +12,10 @@ namespace VoiceDecoder;
 
 public partial class Form1 : Form, INotifyPropertyChanged
 {
+    private readonly string _optionsPath = Path.Combine(Environment.CurrentDirectory, "options.json");
     private readonly List<Channel> _channels = [];
+    private readonly OptionsModel _options;
+
     private WaveOut? _waveOut;
 
     private string _selectedFilePath = string.Empty;
@@ -63,6 +68,18 @@ public partial class Form1 : Form, INotifyPropertyChanged
             DataPropertyName = nameof(VoiceTrack.Id)
         };
         VoicesDgv.Columns.Add(playColumn);
+
+        try
+        {
+            var jsonString = File.ReadAllText(_optionsPath);
+            _options = JsonSerializer.Deserialize<OptionsModel>(jsonString)!;
+        }
+        catch (FileNotFoundException)
+        {
+            _options = new OptionsModel();
+            var jsonString = JsonSerializer.Serialize(_options);
+            File.WriteAllText(_optionsPath, jsonString);
+        }
     }
 
     private void OpenFileButton_Click(object sender, EventArgs e)
@@ -99,7 +116,7 @@ public partial class Form1 : Form, INotifyPropertyChanged
             var voiceTrack = new VoiceTrack(item.CallId, filePath);
             Voices.Add(voiceTrack);
 
-            using var waveWriter = new WaveFileWriter(filePath, new WaveFormat(8000, 16, 1));
+            using var waveWriter = new WaveFileWriter(filePath, new WaveFormat(_options.Rate, 16, 1));
             waveWriter.Write(voice, 0, voice.Length);
             voiceTrack.Duration = waveWriter.TotalTime;
         }
@@ -155,7 +172,7 @@ public partial class Form1 : Form, INotifyPropertyChanged
 
     private void SaveToDatabaseButton_Click(object sender, EventArgs e)
     {
-        var connectionString = "Host=localhost;Port=5432;Database=voicesDb;Username=postgres;Password=96877439;";
+        var connectionString = $"Host={_options.Host};Port={_options.Port};Database={_options.Database};Username={_options.Username};Password={_options.Password};";
         var optionsBuilder = new DbContextOptionsBuilder<ApplicationContext>();
         optionsBuilder.UseNpgsql(connectionString);
         var context = new ApplicationContext(optionsBuilder.Options);
@@ -195,7 +212,7 @@ public partial class Form1 : Form, INotifyPropertyChanged
 
                 void GetOrAdd(Contact contact, out ContactEntity existContact)
                 {
-                    existContact = contacts.Values.FirstOrDefault(x => x.Phone.Equals(contact.PhoneNumber));
+                    existContact = contacts.Values.FirstOrDefault(x => (Regex.IsMatch(x.Phone, contact.PhoneNumber) || Regex.IsMatch(contact.PhoneNumber, x.Phone)) && x.Ip.Contains(contact.Ip));
                     if (existContact is null)
                     {
                         var newContact = new ContactEntity()
